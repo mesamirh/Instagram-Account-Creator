@@ -15,6 +15,7 @@ from selenium.webdriver.common.action_chains import ActionChains
 import undetected_chromedriver as uc
 import shutil
 from pathlib import Path
+import traceback
 
 fake = Faker()
 
@@ -139,67 +140,91 @@ def get_suggested_username(browser):
     except:
         return None
 
-def fill_signup_form(browser, email, full_name, username, password, max_retries=3):
-    """Fill signup form with improved username validation"""
-    wait = WebDriverWait(browser, 10)
-    
+def fill_signup_form(browser, email, name, username, password):
+    """Fill Instagram signup form with proper waits"""
     try:
-        # Fill email and name first
-        email_field = wait.until(EC.presence_of_element_located((By.NAME, "emailOrPhone")))
-        human_like_typing(email_field, email)
-        time.sleep(1)
+        print("Creating Instagram tab...")
+        browser.execute_script("window.open('https://www.instagram.com/accounts/emailsignup')")
+        browser.switch_to.window(browser.window_handles[-1])
         
-        name_field = browser.find_element(By.NAME, "fullName")
-        human_like_typing(name_field, full_name)
-        time.sleep(1)
+        wait = WebDriverWait(browser, 20)
         
-        # Try usernames until one works
-        attempts = 0
-        while attempts < max_retries:
-            username_field = browser.find_element(By.NAME, "username")
-            username_field.clear()
-            human_like_typing(username_field, username)
-            time.sleep(2)
-            
-            if check_username_availability(browser, username):
-                break
-                
-            # Try Instagram's suggestion if available
+        # Wait for page load
+        wait.until(EC.presence_of_element_located((By.TAG_NAME, "body")))
+        time.sleep(5)
+        print("Loading Instagram signup...")
+        
+        # Wait for form with multiple selectors
+        form_selectors = [
+            "form[id='emailForm']",
+            "form[method='post']",
+            "form._ab1y"
+        ]
+        
+        form = None
+        for selector in form_selectors:
             try:
-                suggestion_button = browser.find_element(By.XPATH,
-                    "//button[contains(text(), 'suggestion') or contains(@class, '_acan')]"
-                )
-                suggestion_button.click()
-                time.sleep(1)
-                username = username_field.get_attribute("value")
-                print(f"Trying suggested username: {username}")
-                continue
+                form = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, selector)))
+                if form:
+                    break
             except:
-                pass
+                continue
                 
-            # Generate new username
-            username = generate_username(full_name)
-            print(f"Trying new username: {username}")
-            attempts += 1
+        if not form:
+            raise Exception("Could not find signup form")
             
-        if attempts >= max_retries:
-            raise Exception("Could not find available username after max retries")
+        # Fill email with retry
+        attempts = 0
+        while attempts < 3:
+            try:
+                email_field = wait.until(EC.presence_of_element_located((By.NAME, "emailOrPhone")))
+                human_like_typing(email_field, email)
+                time.sleep(2)
+                break
+            except:
+                attempts += 1
+                time.sleep(2)
+                
+        # Fill remaining fields
+        name_field = browser.find_element(By.NAME, "fullName")
+        human_like_typing(name_field, name)
+        time.sleep(random.uniform(1, 2))
         
-        # Fill password and submit
-        password_field = browser.find_element(By.NAME, "password")
-        human_like_typing(password_field, password)
-        time.sleep(1)
-        
-        signup_button = wait.until(EC.element_to_be_clickable(
-            (By.CSS_SELECTOR, "button[type='submit']")
-        ))
-        signup_button.click()
+        username_field = browser.find_element(By.NAME, "username") 
+        human_like_typing(username_field, username)
         time.sleep(2)
         
-        return username
+        if not check_username_availability(browser, username):
+            new_username = generate_username(name)
+            print(f"Trying new username: {new_username}")
+            username_field.clear()
+            human_like_typing(username_field, new_username)
+            username = new_username
+            
+        password_field = browser.find_element(By.NAME, "password")
+        human_like_typing(password_field, password)
+        time.sleep(random.uniform(1, 2))
+        
+        # Click signup with retry
+        attempts = 0
+        while attempts < 3:
+            try:
+                signup_button = wait.until(EC.element_to_be_clickable(
+                    (By.CSS_SELECTOR, "button[type='submit']")
+                ))
+                signup_button.click()
+                print("Clicked signup button")
+                time.sleep(3)
+                return username
+            except:
+                attempts += 1
+                time.sleep(2)
+                
+        raise Exception("Failed to click signup button")
         
     except Exception as e:
         print(f"Error in signup form: {e}")
+        print(f"Current URL: {browser.current_url}")
         raise
 
 def fill_birthdate_form(browser):
@@ -414,73 +439,44 @@ def upload_profile_photo(browser, profile_dir, used_dir):
         print(f"Error uploading profile photo: {e}")
         return False
 
-def create_account():
-    """Main account creation flow with photo upload"""
-    browser = setup_browser()
+def save_credentials(email, password, name, username):
+    """Save account credentials to file"""
     try:
-        # Setup photo directories
-        profile_dir, posts_dir, used_dir = setup_photo_directories()
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        filepath = "instagram_accounts.txt"
         
-        # Open temp-mail and wait for load
-        print("Opening temp-mail.io...")
-        browser.get('https://temp-mail.io')
-        time.sleep(5)  # Increased wait time
-        
-        # Store temp-mail handle
-        temp_mail_handle = browser.current_window_handle
-        print(f"Temp mail handle captured: {temp_mail_handle}")
-        
-        # Get email while ensuring temp-mail tab stays active
-        temp_email = get_temp_mail(browser)
-        print(f"Using email: {temp_email}")
-        
-        # Create new tab without closing temp-mail
-        print("Creating Instagram tab...")
-        browser.execute_script("window.open('', '_blank');")
-        time.sleep(2)
-        
-        # Verify both tabs exist
-        handles = browser.window_handles
-        if len(handles) != 2:
-            raise Exception("Failed to maintain both tabs")
+        with open(filepath, 'a') as f:
+            f.write(f"\n=== Account Created: {timestamp} ===\n")
+            f.write(f"Email: {email}\n")
+            f.write(f"Password: {password}\n")  
+            f.write(f"Full Name: {name}\n")
+            f.write(f"Username: {username}\n")
+            f.write("=" * 40 + "\n")
             
-        # Switch to new tab explicitly
-        new_tab = [h for h in handles if h != temp_mail_handle][0]
-        browser.switch_to.window(new_tab)
+        print(f"Credentials saved to {filepath}")
         
-        # Load Instagram
-        print("Loading Instagram signup...")
-        browser.get('https://www.instagram.com/accounts/emailsignup/')
-        time.sleep(3)
-        
-        # Generate and fill details
+    except Exception as e:
+        print(f"Error saving credentials: {e}")
+
+def create_account():
+    browser = None
+    try:
+        browser = setup_browser()
+        temp_email = get_temp_mail(browser)
         name = fake.name()
         username = generate_username(name)
         password = generate_password()
         
-        print(f"Filling form with username: {username}")
-        username = fill_signup_form(browser, temp_email, name, username, password)
-        fill_birthdate_form(browser)
-        
-        # Switch back to temp-mail tab using stored handle
-        print("Switching back to temp-mail tab...")
-        browser.switch_to.window(temp_mail_handle)
-        verification_code = wait_for_verification_code(browser)
-        
-        if verification_code:
-            # Switch back to Instagram tab
-            browser.switch_to.window(new_tab)
-            complete_signup(browser, verification_code)
-        
-        # After successful signup, upload profile photo
-        if upload_profile_photo(browser, profile_dir, used_dir):
-            print("Profile photo uploaded successfully")
+        if fill_signup_form(browser, temp_email, name, username, password):
+            save_credentials(temp_email, password, name, username)
             
-        input("Press Enter to close browser...")
+            if fill_birthdate_form(browser):
+                print("Account created successfully!")
+                return True
+        return False
         
     except Exception as e:
         print(f"Error during account creation: {e}")
-        import traceback
         traceback.print_exc()
     finally:
         if browser:
